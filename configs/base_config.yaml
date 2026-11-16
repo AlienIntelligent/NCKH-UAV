@@ -1,0 +1,29 @@
+# configs/base_config.yaml
+environment:
+  device: "cuda" # Tự động chuyển thành "cpu" nếu không có GPU
+  seed: 42
+
+data:
+  # Khi có mạng, bạn chỉ cần sửa 2 dòng này trỏ về DOTA/DIOR thật
+  surrogate_dataset: "./dummy_data/DOTA_dummy"
+  target_dataset: "./dummy_data/DIOR_dummy"
+  img_size: 1024
+  batch_size: 4
+
+  # Unified Mapping (Đã chốt ở GĐ2)
+  classes:
+    0: "aircraft"
+    1: "vehicle"
+
+models:
+  surrogate:
+    name: "yolov8n.pt" # Dùng bản nano để test luồng cho nhanh
+    epochs: 2 # Test luồng train
+  target:
+    name: "rt-detr" # Placeholder cho MMDetection
+    epochs: 2
+
+attack:
+  de_pop_size: 10
+  de_max_iter: 5
+  patch_area_ratio: 0.05 # 5% diện tích bbox

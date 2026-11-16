@@ -1,0 +1,58 @@
+# ===============================================
+# 1. DỮ LIỆU & TRỌNG SỐ (TUYỆT ĐỐI KHÔNG ĐẨY LÊN)
+# ===============================================
+# Data gốc và data đã xử lý (quá nặng)
+data/
+dummy_data/
+datasets/
+
+# Weights, Checkpoints (thường > 100MB)
+models/*.pt
+models/*.pth
+models/*.onnx
+weights/
+*.pt
+*.pth
+*.onnx
+
+# Thư mục log sinh ra khi train/predict (Ultralytics, MMDetection)
+runs/
+wandb/
+work_dirs/ # MMDetection log
+
+# ===============================================
+# 2. PYTHON CACHE & MÔI TRƯỜNG ẢO
+# ===============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv/
+
+# ===============================================
+# 3. JUPYTER & COLAB
+# ===============================================
+.ipynb_checkpoints/
+*.ipynb  # Bỏ qua notebook (nếu muốn giữ notebook thì xóa dòng này, nhưng nhớ Clear Output trước khi push)
+
+# ===============================================
+# 4. HỆ THỐNG & IDE (Sinh ra tự động, không cần thiết)
+# ===============================================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===============================================
+# 5. FILE TẠM & LOGS
+# ===============================================
+*.log
+logs/
+temp/
+*.csv # Nếu bạn lưu kết quả đánh giá quá lớn
