@@ -6,9 +6,17 @@ while maintaining physical constraints (TV smoothness, NPS printability).
 
 Black-box attack: optimizes against surrogate, then transfers to unknown target.
 
+Supports TWO optimisation modes:
+  * appearance-only (default)  — DE optimises patch pixels; patch is placed at a
+    fixed location (bbox centre, or centre+corners for num_patches>1).
+  * appearance + POSITION      — DE *also* optimises where each mini-patch sits
+    inside the target bbox (DeMPAA / Du et al. style). One shared appearance is
+    placed at `num_patches` learned positions.
+
 References:
   - Tang et al. 2024 — Black-box DE vs aerial detectors
-  - DeMPAA — Multi-mini-patch adversarial attack
+  - DeMPAA — Multi-mini-patch adversarial attack (learned placement)
+  - Du et al. WACV 2022 — Physical attacks on aerial detectors
 """
 
 import numpy as np
@@ -89,6 +97,11 @@ class DEAttackReal:
         # Will be set by prepare_attack_set()
         self.attack_data = []  # list of dicts {img, clean_dets}
 
+        # Positions of the best patch from the most recent run_de() call
+        # (None when appearance-only). Read this after run_de to pass to
+        # evaluate_patch / save_attack_examples, including for transfer eval.
+        self.last_positions = None
+
     # ------------------------------------------------------------------
     # 1. Prepare attack image set
     # ------------------------------------------------------------------
@@ -168,15 +181,45 @@ class DEAttackReal:
         return len(self.attack_data)
 
     # ------------------------------------------------------------------
-    # 2. Patch placement
+    # 2. Candidate decoding (appearance + optional positions)
     # ------------------------------------------------------------------
     @staticmethod
-    def apply_patch(img, detections, patch, num_patches=1):
+    def _decode_candidate(cand, patch_size, num_patches, optimize_positions):
+        """
+        Split a flat DE candidate vector into (appearance, positions).
+
+        Layout:
+          [ patch_size*patch_size*3 appearance pixels in 0..255 ]
+          [ num_patches*2 position values in 0..255 ]   (only if optimize_positions)
+
+        positions are returned as an (num_patches, 2) array of (ox, oy) in [0, 1],
+        each the *centre* of a mini-patch expressed as a fraction of the target
+        bbox width/height. Returns positions=None when optimize_positions is False.
+        """
+        app_dim = patch_size * patch_size * 3
+        appearance = cand[:app_dim].reshape(patch_size, patch_size, 3).astype(np.uint8)
+        positions = None
+        if optimize_positions:
+            raw = cand[app_dim: app_dim + num_patches * 2]
+            positions = np.clip(raw / 255.0, 0.0, 1.0).reshape(num_patches, 2)
+        return appearance, positions
+
+    # ------------------------------------------------------------------
+    # 3. Patch placement
+    # ------------------------------------------------------------------
+    @staticmethod
+    def apply_patch(img, detections, patch, num_patches=1, positions=None):
         """
         Place patch on image at each detection location.
 
-        num_patches=1 : single patch centred on bbox
-        num_patches>1 : multi-mini-patches at centre + corners
+        If `positions` is given (shape [num_patches, 2], values in [0,1]):
+            place `num_patches` copies of `patch` at the learned positions inside
+            each target bbox — (ox, oy) is the patch CENTRE as a fraction of the
+            bbox width/height. Patches are clamped to stay within the image.
+
+        If `positions` is None:
+            num_patches == 1 : single patch centred on bbox
+            num_patches  > 1 : fixed multi-mini-patches at centre + corners
         """
         patched = img.copy()
         h, w = img.shape[:2]
@@ -184,6 +227,29 @@ class DEAttackReal:
 
         for det in detections:
             x1, y1, x2, y2 = det["bbox"]
+
+            # ── Learned positions ───────────────────────────────────────
+            if positions is not None:
+                bw = max(1.0, x2 - x1)
+                bh = max(1.0, y2 - y1)
+                for k in range(num_patches):
+                    ox = float(positions[k][0])
+                    oy = float(positions[k][1])
+                    cx = x1 + ox * bw
+                    cy = y1 + oy * bh
+                    px1 = int(round(cx - ps / 2.0))
+                    py1 = int(round(cy - ps / 2.0))
+                    # keep the patch fully inside the image
+                    px1 = max(0, min(px1, w - ps)) if w >= ps else 0
+                    py1 = max(0, min(py1, h - ps)) if h >= ps else 0
+                    px2 = min(w, px1 + ps)
+                    py2 = min(h, py1 + ps)
+                    pw, ph = px2 - px1, py2 - py1
+                    if pw > 0 and ph > 0:
+                        patched[py1:py2, px1:px2] = patch[:ph, :pw]
+                continue
+
+            # ── Fixed placement (legacy behaviour) ──────────────────────
             cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
 
             if num_patches == 1:
@@ -196,17 +262,17 @@ class DEAttackReal:
                 if pw > 0 and ph > 0:
                     patched[py1:py2, px1:px2] = patch[:ph, :pw]
             else:
-                # Multi-mini-patch
+                # Fixed multi-mini-patch (centre + corners)
                 mini_ps = max(4, ps // 2)
                 mini_patch = cv2.resize(patch, (mini_ps, mini_ps))
-                positions = [
+                corner_positions = [
                     (cx, cy),
                     (int(x1), int(y1)),
                     (int(x2), int(y1)),
                     (int(x1), int(y2)),
                     (int(x2), int(y2)),
                 ]
-                for mx, my in positions[:num_patches]:
+                for mx, my in corner_positions[:num_patches]:
                     mpx1 = max(0, mx - mini_ps // 2)
                     mpy1 = max(0, my - mini_ps // 2)
                     mpx2 = min(w, mpx1 + mini_ps)
@@ -218,16 +284,18 @@ class DEAttackReal:
         return patched
 
     # ------------------------------------------------------------------
-    # 3. Fitness function
+    # 4. Fitness function
     # ------------------------------------------------------------------
-    def fitness(self, patch_flat, patch_size, num_patches,
+    def fitness(self, cand, patch_size, num_patches, optimize_positions=False,
                 w_obj=1.0, w_fp=0.3, w_tv=0.01, w_nps=0.001):
         """
-        Evaluate one candidate patch across all attack images.
+        Evaluate one candidate across all attack images.
 
-        Returns scalar (lower is better for the attacker).
+        `cand` is a flat vector: appearance pixels (+ position values if
+        optimize_positions). Returns scalar (lower is better for the attacker).
         """
-        patch = patch_flat.reshape(patch_size, patch_size, 3).astype(np.uint8)
+        patch, positions = self._decode_candidate(
+            cand, patch_size, num_patches, optimize_positions)
 
         total_obj = 0.0
         total_fp = 0.0
@@ -237,7 +305,8 @@ class DEAttackReal:
             img = data["img"]
             clean_dets = data["clean_dets"]
 
-            patched_img = self.apply_patch(img, clean_dets, patch, num_patches)
+            patched_img = self.apply_patch(img, clean_dets, patch,
+                                           num_patches, positions)
 
             results = self.model.predict(
                 source=patched_img,
@@ -276,12 +345,13 @@ class DEAttackReal:
         return w_obj * avg_obj + w_fp * avg_fp + w_tv * tv + w_nps * nps
 
     # ------------------------------------------------------------------
-    # 4. DE optimisation loop
+    # 5. DE optimisation loop
     # ------------------------------------------------------------------
     def run_de(
         self,
         patch_size=32,
         num_patches=1,
+        optimize_positions=False,
         pop_size=20,
         max_gen=50,
         F=0.8,
@@ -292,15 +362,24 @@ class DEAttackReal:
         w_nps=0.001,
     ):
         """
-        Run fixed-population DE.
+        Run fixed-population DE.  Strategy: DE/best/1/bin.
 
-        Strategy: DE/best/1/bin
-        Returns: (best_patch [H,W,3 uint8], history [list of best fitness])
+        optimize_positions=False : DE searches patch appearance only (legacy).
+        optimize_positions=True  : DE searches appearance AND the (ox, oy) centre
+                                    of each of `num_patches` mini-patches inside
+                                    the target bbox.
+
+        Returns: (best_patch [H,W,3 uint8], history [list of best fitness]).
+        The best positions (or None) are stored on self.last_positions — pass
+        them to evaluate_patch()/save_attack_examples(), including transfer eval.
         """
-        ndim = patch_size * patch_size * 3
+        app_dim = patch_size * patch_size * 3
+        ndim = app_dim + (num_patches * 2 if optimize_positions else 0)
 
+        mode = "APPEARANCE + POSITION" if optimize_positions else "APPEARANCE ONLY"
         print(f"\n{'=' * 60}")
         print(f"  DE ATTACK  —  patch {patch_size}x{patch_size} RGB  ({ndim} dims)")
+        print(f"  mode={mode}")
         print(f"  pop={pop_size}  gen={max_gen}  F={F}  CR={CR}")
         print(f"  images={len(self.attack_data)}  num_patches/obj={num_patches}")
         print(f"  weights: obj={w_obj} fp={w_fp} tv={w_tv} nps={w_nps}")
@@ -312,7 +391,8 @@ class DEAttackReal:
         pop = np.random.uniform(0, 255, (pop_size, ndim))
 
         def _eval(x):
-            return self.fitness(x, patch_size, num_patches, w_obj, w_fp, w_tv, w_nps)
+            return self.fitness(x, patch_size, num_patches, optimize_positions,
+                                w_obj, w_fp, w_tv, w_nps)
 
         fit = np.array([_eval(ind) for ind in pop])
 
@@ -357,22 +437,32 @@ class DEAttackReal:
                 print(f"  Gen {g:>2} | best {best_fit:.4f} | mean {np.mean(fit):.4f} "
                       f"| {elapsed:.0f}s")
 
-        best_patch = best_ind.reshape(patch_size, patch_size, 3).astype(np.uint8)
+        best_patch, best_positions = self._decode_candidate(
+            best_ind, patch_size, num_patches, optimize_positions)
+        self.last_positions = best_positions
 
         elapsed = time.time() - t0
         print(f"\n{'=' * 60}")
         print(f"  DE DONE — best fitness {best_fit:.4f}  ({elapsed:.1f}s)")
+        if best_positions is not None:
+            pos_str = ", ".join(f"({p[0]:.2f},{p[1]:.2f})" for p in best_positions)
+            print(f"  best positions (bbox-frac): {pos_str}")
         print(f"{'=' * 60}")
 
         return best_patch, history
 
     # ------------------------------------------------------------------
-    # 5. Evaluation
+    # 6. Evaluation
     # ------------------------------------------------------------------
-    def evaluate_patch(self, patch, img_dir=None, lbl_dir=None,
+    def evaluate_patch(self, patch, positions=None, img_dir=None, lbl_dir=None,
                        n_images=None, num_patches=1, seed=99):
         """
         Evaluate an optimised patch.  Returns dict with ASR, AORR, etc.
+
+        positions: pass self.last_positions (or the positions from the run that
+            produced `patch`) to reproduce the learned placement. None ⇒ fixed
+            placement. For transfer eval, pass the SAME positions — they are
+            bbox-relative fractions and therefore model-agnostic.
 
         If img_dir is given, prepares a NEW eval set (independent of attack set).
         Otherwise re-uses the attack set.
@@ -394,7 +484,8 @@ class DEAttackReal:
 
         for data in eval_data:
             img = data["img"]
-            patched_img = self.apply_patch(img, data["clean_dets"], patch, num_patches)
+            patched_img = self.apply_patch(img, data["clean_dets"], patch,
+                                           num_patches, positions)
 
             results = self.model.predict(
                 source=patched_img,
@@ -463,16 +554,18 @@ def plot_patch(patch, save_path="best_patch.png"):
     print(f"  Saved patch visualisation → {save_path}")
 
 
-def save_attack_examples(attack, patch, num_patches=1,
+def save_attack_examples(attack, patch, num_patches=1, positions=None,
                          save_dir="attack_examples", n=6):
     """
     Side-by-side clean (green boxes) vs patched (red boxes) images.
+    Pass `positions` (e.g. attack.last_positions) to render learned placement.
     """
     os.makedirs(save_dir, exist_ok=True)
 
     for idx, data in enumerate(attack.attack_data[:n]):
         img = data["img"]
-        patched = attack.apply_patch(img, data["clean_dets"], patch, num_patches)
+        patched = attack.apply_patch(img, data["clean_dets"], patch,
+                                     num_patches, positions)
 
         # --- clean visualisation ---
         vis_clean = img.copy()
