@@ -5,10 +5,6 @@
 
 Repo này chứa mã nguồn, notebook thực nghiệm và tài liệu của đề tài NCKH. Đề tài đặt câu hỏi: **nếu đối phương dùng UAV với một bộ phát hiện đối tượng mà ta hoàn toàn không biết (kiến trúc, dữ liệu huấn luyện, không truy vấn được), thì một vài mảng ngụy trang nhỏ đặt lên máy bay/xe có đủ làm chúng "biến mất" khỏi bộ phát hiện không?**
 
-- Người thực hiện: Neyuht (làm một mình)
-- Thời hạn: khoảng 1 tháng, từ giữa tháng 11/2026
-- Môi trường chạy chính: Kaggle (2× Tesla T4); phát triển/kiểm thử luồng trên máy cá nhân (CPU); dự kiến chạy bản cuối trên GPU T100 của trường.
-
 ---
 
 ## Mục lục
