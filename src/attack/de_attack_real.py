@@ -82,11 +82,16 @@ class DEAttackReal:
         device="0",
         conf_threshold=0.25,
         iou_threshold=0.5,
+        match_iou=0.5,
         verbose=True,
     ):
         self.device = device
         self.conf_threshold = conf_threshold
-        self.iou_threshold = iou_threshold
+        self.iou_threshold = iou_threshold      # NMS IoU for the detector
+        # IoU for matching a prediction to a clean target (target-survival
+        # and false-positive decisions). Used consistently by BOTH fitness
+        # and evaluate_patch so optimisation and evaluation agree.
+        self.match_iou = match_iou
         self.verbose = verbose
 
         # Load surrogate
@@ -105,7 +110,8 @@ class DEAttackReal:
     # ------------------------------------------------------------------
     # 1. Prepare attack image set
     # ------------------------------------------------------------------
-    def prepare_attack_set(self, img_dir, lbl_dir=None, n_images=30, seed=42):
+    def prepare_attack_set(self, img_dir, lbl_dir=None, n_images=30, seed=42,
+                           exclude=None):
         """
         Select validation images that have clean detections.
 
@@ -114,8 +120,11 @@ class DEAttackReal:
             lbl_dir:  path to labels — used only to pre-filter non-empty
             n_images: how many images to attack (more ⇒ slower but more robust)
             seed:     reproducibility
+            exclude:  iterable of image paths to skip (e.g. the optimisation set,
+                      so a held-out eval set is truly disjoint)
         """
         rng = random.Random(seed)
+        exclude = set(exclude) if exclude else set()
 
         # Gather candidate image paths
         exts = ("*.jpg", "*.jpeg", "*.png", "*.bmp")
@@ -136,6 +145,9 @@ class DEAttackReal:
 
         if self.verbose:
             print(f"[DEAttack] Candidates with labels: {len(all_imgs)}")
+
+        if exclude:
+            all_imgs = [ip for ip in all_imgs if ip not in exclude]
 
         rng.shuffle(all_imgs)
         candidates = all_imgs[: n_images * 3]  # over-select, then keep those with dets
@@ -328,12 +340,17 @@ class DEAttackReal:
                 cb = cd["bbox"]
                 max_surv = 0.0
                 for j in range(len(patched_bboxes)):
-                    if calc_iou(cb, patched_bboxes[j]) > 0.3:
+                    if calc_iou(cb, patched_bboxes[j]) > self.match_iou:
                         max_surv = max(max_surv, patched_confs[j])
                 total_obj += max_surv  # we want this → 0
 
-            # False positives
-            new_fp = max(0, len(patched_confs) - len(clean_dets))
+            # False positives = predicted boxes that match NO clean target
+            # (counting net box difference can hide real FPs when targets vanish)
+            new_fp = 0
+            for j in range(len(patched_bboxes)):
+                if not any(calc_iou(cd["bbox"], patched_bboxes[j]) > self.match_iou
+                           for cd in clean_dets):
+                    new_fp += 1
             total_fp += new_fp
 
         avg_obj = total_obj / max(1, total_targets)
@@ -455,7 +472,7 @@ class DEAttackReal:
     # 6. Evaluation
     # ------------------------------------------------------------------
     def evaluate_patch(self, patch, positions=None, img_dir=None, lbl_dir=None,
-                       n_images=None, num_patches=1, seed=99):
+                       n_images=None, num_patches=1, seed=99, exclude=None):
         """
         Evaluate an optimised patch.  Returns dict with ASR, AORR, etc.
 
@@ -463,6 +480,8 @@ class DEAttackReal:
             produced `patch`) to reproduce the learned placement. None ⇒ fixed
             placement. For transfer eval, pass the SAME positions — they are
             bbox-relative fractions and therefore model-agnostic.
+        exclude: image paths to skip when building the eval set (pass the
+            optimisation-set paths so held-out is truly disjoint).
 
         If img_dir is given, prepares a NEW eval set (independent of attack set).
         Otherwise re-uses the attack set.
@@ -471,7 +490,8 @@ class DEAttackReal:
             # Build a fresh eval set
             saved = self.attack_data
             self.prepare_attack_set(img_dir, lbl_dir,
-                                    n_images=n_images or 50, seed=seed)
+                                    n_images=n_images or 50, seed=seed,
+                                    exclude=exclude)
             eval_data = self.attack_data
             self.attack_data = saved
         else:
@@ -506,13 +526,18 @@ class DEAttackReal:
                 clean_conf = cd["conf"]
                 max_match = 0.0
                 for j in range(len(p_bboxes)):
-                    if calc_iou(cb, p_bboxes[j]) > self.iou_threshold:
+                    if calc_iou(cb, p_bboxes[j]) > self.match_iou:
                         max_match = max(max_match, p_confs[j])
                 if max_match < self.conf_threshold:
                     suppressed += 1
                 total_conf_red += (clean_conf - max_match)
 
-            new_fp = max(0, len(p_confs) - len(data["clean_dets"]))
+            # FP = predicted boxes matching no clean target (not a net count)
+            new_fp = 0
+            for j in range(len(p_bboxes)):
+                if not any(calc_iou(cd["bbox"], p_bboxes[j]) > self.match_iou
+                           for cd in data["clean_dets"]):
+                    new_fp += 1
             total_new_fp += new_fp
 
         metrics = dict(

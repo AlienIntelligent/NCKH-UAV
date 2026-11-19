@@ -87,9 +87,11 @@ Sửa trong `config_local.yaml` → `attack.configs`:
 | Cấu hình | Ý nghĩa |
 |----------|---------|
 | `random_single` | **Đối chứng**: patch ngẫu nhiên 32×32, không tối ưu |
-| `baseline_center` | DE, 1 patch, cố định tâm |
-| `opt_position` | DE, 1 patch, **tối ưu vị trí** |
-| `multi_patch_opt` | DE, 5 patch nhỏ, **tối ưu vị trí** |
+| `baseline_center` | DE, 1 patch 32×32, cố định tâm |
+| `opt_position` | DE, 1 patch 32×32, **tối ưu vị trí** |
+| `multi_patch_opt` | DE, 4 patch 16×16, **tối ưu vị trí** |
+
+> **Cùng diện tích để so công bằng:** mọi cấu hình đều = **1024 px²** (1×32² = 4×16²). Nhờ vậy `random_single` là đối chứng diện-tích-khớp cho tất cả.
 
 Mỗi cấu hình đánh giá 2 nơi: **surrogate (DOTA held-out)** và **transfer → target (DIOR held-out)**.
 

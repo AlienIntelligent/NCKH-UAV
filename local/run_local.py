@@ -241,9 +241,10 @@ def stage_attack(cfg, surr_pt, target_pt):
             # Đối chứng: patch ngẫu nhiên cùng diện tích, KHÔNG tối ưu
             np.random.seed(seed)
             best_patch = np.random.randint(0, 256, (ps, ps, 3), dtype=np.uint8)
-            pos, history = None, None
+            pos, history, opt_paths = None, None, None
         else:
             atk_s.prepare_attack_set(dota_vi, dota_vl, n_images=ac["n_attack"], seed=seed)
+            opt_paths = [d["img_path"] for d in atk_s.attack_data]  # exclude from held-out
             best_patch, history = atk_s.run_de(
                 patch_size=ps, num_patches=npa, optimize_positions=c["optimize_positions"],
                 pop_size=ac["pop_size"], max_gen=ac["max_gen"], F=ac["F"], CR=ac["CR"],
@@ -258,9 +259,10 @@ def stage_attack(cfg, surr_pt, target_pt):
             plot_convergence(history, str(cdir / "convergence.png"))
         plot_patch(best_patch, str(cdir / "patch.png"))
 
-        # Surrogate held-out (DOTA)
+        # Surrogate held-out (DOTA) — disjoint from the optimisation set
         m_s = atk_s.evaluate_patch(best_patch, positions=pos, img_dir=dota_vi, lbl_dir=dota_vl,
-                                   n_images=ac["n_heldout"], num_patches=npa, seed=99)
+                                   n_images=ac["n_heldout"], num_patches=npa, seed=99,
+                                   exclude=opt_paths)
         atk_s.prepare_attack_set(dota_vi, dota_vl, n_images=6, seed=seed)
         save_attack_examples(atk_s, best_patch, num_patches=npa, positions=pos,
                              save_dir=str(cdir / "examples_surrogate_dota"), n=6)

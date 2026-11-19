@@ -1,53 +1,51 @@
 # ══════════════════════════════════════════════════════════════════════
-#  config_local.yaml — cấu hình chạy LOCAL (máy có GPU)
-#  Chỉnh các đường dẫn / tham số ở đây, rồi chạy:  run_all.bat  (Windows)
+#  config_local.yaml — chạy LOCAL (máy có GPU)
+#  THIẾT KẾ ĐÚNG: surrogate train trên DOTA, target (giữ kín) train trên DIOR
+#  → khác KIẾN TRÚC lẫn DỮ LIỆU. Patch tối ưu trên DOTA, đo transfer trên DIOR.
 # ══════════════════════════════════════════════════════════════════════
 
 paths:
-  # Dữ liệu RAW (đã có sẵn trên máy — đổi nếu bạn để chỗ khác)
   dota_images: "D:/ADVER-ATTAC/NCKH-UAV/data/DOTA/raw/dota_raw/images"
   dota_labels: "D:/ADVER-ATTAC/NCKH-UAV/data/DOTA/raw/dota_raw/labelTxt"
   dior_jpeg:   "D:/ADVER-ATTAC/NCKH-UAV/data/DIOR/raw/dior_raw/JPEGImages"
   dior_ann:    "D:/ADVER-ATTAC/NCKH-UAV/data/DIOR/raw/dior_raw/Annotations"
 
-  # Nơi ghi dữ liệu đã xử lý, model, kết quả tấn công
-  work_dir: "D:/ADVER-ATTAC/NCKH-UAV/data"            # processed/ + yolo_dataset/
-  runs_dir: "D:/ADVER-ATTAC/NCKH-UAV/runs"            # model train ra
+  work_dir:   "D:/ADVER-ATTAC/NCKH-UAV/data"          # yolo_dota/ + yolo_dior/
+  runs_dir:   "D:/ADVER-ATTAC/NCKH-UAV/runs"
   attack_dir: "D:/ADVER-ATTAC/NCKH-UAV/attack_results"
 
 environment:
-  device: "0"        # "0" = GPU 0 ; "0,1" nếu 2 GPU ; "cpu" nếu không có GPU
+  device: "0"        # "0" = GPU 0 ; "0,1" = 2 GPU ; "cpu"
   seed: 42
 
-# ── Các stage sẽ chạy (bỏ bớt để chạy riêng phần nào) ──
-# prepare = xử lý data ; surrogate = train YOLOv8n ; target = train RT-DETR ; attack = tấn công+đánh giá
 run:
   stages: ["prepare", "surrogate", "target", "attack"]
 
-# ── Tái sử dụng model đã train (đặt reuse=true + trỏ weights để KHỎI train lại) ──
+# ── Surrogate = YOLOv8n train trên DOTA-only (nhóm tối ưu) ──
 surrogate:
   reuse: false
-  weights: ""        # vd: "D:/ADVER-ATTAC/NCKH-UAV/runs/detect/surrogate_yolov8n/weights/best.pt"
+  weights: ""        # DOTA-only best.pt nếu đã có (vd v4). KHÔNG dùng model train trên dữ liệu gộp.
   epochs: 50
   imgsz: 1024
-  batch: 8           # GPU khỏe tăng lên 16 ; OOM thì giảm
+  batch: 8
 
+# ── Target = RT-DETR-l train trên DIOR-only (nhóm giữ kín) ──
 target:
   reuse: false
-  weights: ""        # vd: "D:/ADVER-ATTAC/NCKH-UAV/runs/detect/target_rtdetr/weights/best.pt"
+  weights: ""
   epochs: 50
-  imgsz: 640         # GPU khỏe (>=16GB) có thể để 1024
-  batch: 8           # RT-DETR nặng hơn ; OOM thì giảm còn 4/2
+  imgsz: 640
+  batch: 8
 
 train_common:
   patience: 15
-  cache: true        # cache ảnh sau epoch 1 → nhanh hơn (cần RAM)
-  split_ratio: 0.8   # train/val
+  cache: true
+  split_ratio: 0.8
 
-# ── Tấn công DE + tối ưu vị trí ──
+# ── Tấn công DE + tối ưu vị trí + ĐỐI CHỨNG ngẫu nhiên ──
 attack:
-  n_attack: 30       # số ảnh để tối ưu patch
-  n_heldout: 50      # số ảnh đánh giá held-out
+  n_attack: 30       # ảnh DOTA để tối ưu patch
+  n_heldout: 50      # ảnh đánh giá held-out (DOTA cho surrogate, DIOR cho transfer)
   pop_size: 20
   max_gen: 50
   F: 0.8
@@ -56,8 +54,11 @@ attack:
   w_fp: 0.3
   w_tv: 0.01
   w_nps: 0.001
-  # Các cấu hình so sánh (xoá bớt để chạy nhanh)
+  # random=true → KHÔNG tối ưu, chỉ patch ngẫu nhiên cùng diện tích (đối chứng bắt buộc)
+  # TẤT CẢ cấu hình cùng tổng diện tích 1024 px² để so sánh công bằng:
+  #   1×32² = 1024  ==  4×16² = 1024
   configs:
-    - {name: "baseline_center", patch_size: 32, num_patches: 1, optimize_positions: false}
-    - {name: "opt_position",    patch_size: 32, num_patches: 1, optimize_positions: true}
-    - {name: "multi_patch_opt", patch_size: 20, num_patches: 5, optimize_positions: true}
+    - {name: "random_single",   patch_size: 32, num_patches: 1, optimize_positions: false, random: true}
+    - {name: "baseline_center", patch_size: 32, num_patches: 1, optimize_positions: false, random: false}
+    - {name: "opt_position",    patch_size: 32, num_patches: 1, optimize_positions: true,  random: false}
+    - {name: "multi_patch_opt", patch_size: 16, num_patches: 4, optimize_positions: true,  random: false}
