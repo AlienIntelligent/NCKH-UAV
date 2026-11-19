@@ -1,0 +1,21 @@
+# ============================================================
+# NCKH-UAV: Adversarial Camouflage Evaluation
+# LƯU Ý: torch + torchvision cài riêng TRƯỚC (xem setup_local.bat)
+# ============================================================
+
+# --- Object Detection ---
+ultralytics>=8.1.0
+
+# --- Tối ưu & Tính toán ---
+scipy>=1.11.0
+numpy>=1.24.0
+shapely>=2.0.0
+
+# --- Xử lý ảnh & Dữ liệu ---
+opencv-python>=4.8.0
+Pillow>=10.0.0
+tqdm>=4.65.0
+
+# --- Cấu hình & Logging ---
+PyYAML>=6.0
+matplotlib>=3.7.0

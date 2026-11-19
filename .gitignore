@@ -1,24 +1,24 @@
 # ===============================================
-# 1. DỮ LIỆU & TRỌNG SỐ (TUYỆT ĐỐI KHÔNG ĐẨY LÊN)
+# 1. DỮ LIỆU & TRỌNG SỐ (KHÔNG ĐẨY LÊN — dataset tải từ Kaggle, xem README)
 # ===============================================
-# Data gốc và data đã xử lý (quá nặng)
 data/
 dummy_data/
 datasets/
 
-# Weights, Checkpoints (thường > 100MB)
-models/*.pt
-models/*.pth
-models/*.onnx
-weights/
+# Weights, checkpoints (thường > 100MB)
 *.pt
 *.pth
 *.onnx
+weights/
 
-# Thư mục log sinh ra khi train/predict (Ultralytics, MMDetection)
+# Log sinh ra khi train/predict (Ultralytics, MMDetection)
 runs/
 wandb/
-work_dirs/ # MMDetection log
+work_dirs/
+
+# Bản đóng gói mã để upload lên Kaggle (trùng với src/, không cần đẩy)
+nckh-uav-code/
+nckh-uav-code.zip
 
 # ===============================================
 # 2. PYTHON CACHE & MÔI TRƯỜNG ẢO
@@ -34,13 +34,12 @@ ENV/
 .venv/
 
 # ===============================================
-# 3. JUPYTER & COLAB
+# 3. JUPYTER (giữ notebook v4–v6 — nhớ Clear Output trước khi push nếu nặng)
 # ===============================================
 .ipynb_checkpoints/
-*.ipynb  # Bỏ qua notebook (nếu muốn giữ notebook thì xóa dòng này, nhưng nhớ Clear Output trước khi push)
 
 # ===============================================
-# 4. HỆ THỐNG & IDE (Sinh ra tự động, không cần thiết)
+# 4. HỆ THỐNG & IDE
 # ===============================================
 .DS_Store
 Thumbs.db
@@ -55,4 +54,3 @@ Thumbs.db
 *.log
 logs/
 temp/
-*.csv # Nếu bạn lưu kết quả đánh giá quá lớn

@@ -1,6 +1,6 @@
 # configs/base_config.yaml
 environment:
-  device: "cuda" # Tự động chuyển thành "cpu" nếu không có GPU
+  device: "cpu" # Tự động chuyển thành "cpu" nếu không có GPU
   seed: 42
 
 data:
